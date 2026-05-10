@@ -10,6 +10,8 @@ output zero
 
 );
 
+
+  assign zero=(result==19'd0);
 always @(*) begin
     result=19'b0;
     carry=1'b0;
@@ -30,12 +32,12 @@ always @(*) begin
         5'b01001: result=a^b;
         5'b01010: result=~a;        
         
-        default: result=19'b0;
+        default: result=19'd0;
         endcase
     
   end
   
-  assign zero=(result==19'b0);
+
   
   endmodule      
         
