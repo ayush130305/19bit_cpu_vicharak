@@ -1,33 +1,80 @@
 `timescale 1ns / 1ps
 
 module cpu(
-    input clk,
-    input rst,
-    input [18:0] mem_data_in,
-    output reg[13:0] mem_addr,
-    output reg[18:0] mem_data_out,
-    output reg mem_write_en
+    input wire clk,
+    input wire rst,
+    
+    output reg [13:0] imem_addr,
+    input wire [18:0] imem_data,
+    
+    input [18:0] dmem_data_in,
+    output reg[13:0] dmem_addr,
+    output reg[18:0] dmem_data_out,
+    output reg dmem_write_en
     );
 
+localparam [4:0]
+op_add = 5'b00000,
+op_sub = 5'b00001,
+op_mul = 5'b00010,
+op_div = 5'b00011,
+op_rem = 5'b00100,
+op_inc = 5'b00101,
+op_dec = 5'b00110,
+op_and = 5'b00111,
+op_or = 5'b01000,
+op_xor = 5'b01001,
+op_not = 5'b01010,
+op_jmp = 5'b01011,
+op_beq = 5'b01100,
+op_bne = 5'b01101,
+op_call = 5'b01110,
+op_ret = 5'b01111,
+op_load = 5'b10000,
+op_store = 5'b10001,
+op_fft = 5'b10010,
+op_enc = 5'b10011,
+op_decr = 5'b10100;
 
-reg[18:0] pc;
-reg[3:0] sp;
+
 reg[18:0] reg_file[0:15];
+
+reg[3:0] sp;
 reg[18:0] stack [0:15];
+
+reg [13:0] pc;
+
 reg flag_z,flag_c;
 
+reg flush_next;
+
 //PIPELINING 3 STAGE
-reg [18:0] instr_register; // fetch (holds instruction)
-reg [18:0] alu_result; // decode/execute (holds alu result)
-reg [3:0] dest_index; // decode/execute (holds destination register index)
-reg writeback_register; //write back (controls write back signal)
+reg [18:0] ifid_instr; // fetch (holds instruction)
 
 
-wire[4:0] opcode=instr_register[18:14];
-wire[3:0] R=instr_register[13:10];
-wire[3:0] r1=instr_register[9:6];
-wire[3:0] r2=instr_register[5:2];
-wire [13:0] addr_field=instr_register[13:0];
+reg [18:0] idex_op_a;
+reg [18:0] idex_op_b;
+reg [4:0] idex_opcode;
+reg [3:0] idex_r;
+reg [3:0] idex_r1;
+reg [3:0] idex_r2;
+reg [13:0] idex_addr;
+reg [13:0] idex_pc;
+
+reg [18:0] exmem_result;
+reg exmem_wb_en;
+reg [3:0] exmem_dest;
+reg exmem_mem_op;
+reg exmem_is_load;
+reg [18:0] exmem_store_data;
+reg [18:0] exmem_mem_addr;
+
+reg [18:0] memwb_result;
+reg memwb_wb_en;
+reg [3:0] memwb_dest;
+
+
+
 
 //encryption
 

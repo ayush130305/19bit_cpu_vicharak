@@ -40,10 +40,9 @@ module encryption(
                 end else begin
                 done<=1'b0;
                 mem_write_en<=1'b0;
-                
                 case (state)
                 S_IDLE: begin
-                if(start) begin mem_addr<=src_base;state<=S_LD0;
+                if(start) begin mem_addr<=src_base;state<=S_LD0; end
                 end
                 S_LD0: begin
                 state<= S_PROC0;
@@ -70,9 +69,8 @@ module encryption(
                 mem_addr<=src_base + 14'd2;
                 state<=S_WAIT2;
                 end
-                S_WAIT2: begin state<= S_PROC2; end
-                
-                 S_PROC2: begin
+                S_WAIT2: begin state<= S_PROC2; end                
+                S_PROC2: begin
                 mem_addr<=dst_base+14'd2;
                 mem_data_out<=mem_data_in ^ KEY2;
                 mem_write_en<=1'b1;
@@ -83,15 +81,13 @@ module encryption(
                 state<=S_WAIT3;
                 end
                 S_WAIT3: begin state<= S_PROC3; end
-                
-                 S_PROC3: begin
+                S_PROC3: begin
                 mem_addr<=dst_base+14'd3;
-                mem_data_out<=mem_data_in ^ KEY0;
+                mem_data_out<=mem_data_in ^ KEY3;
                 mem_write_en<=1'b1;
                 state<= S_DONE;
                 end
-                S_DONE: begin done<=1'b1; state<=S_IDLE; end
-                
+                S_DONE: begin done<=1'b1; state<=S_IDLE; end 
                 default: state<=S_IDLE;
                 endcase
                 end
