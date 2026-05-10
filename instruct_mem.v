@@ -2,7 +2,7 @@
 
 
 
-module instruct_mem(
+module imem(
 input wire clk,
 input wire [13:0] addr,
 output reg [18:0] data_out

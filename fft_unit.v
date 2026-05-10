@@ -59,7 +59,7 @@ always @(posedge clk) begin
         state<=S_IDLE; done<=1'b0; mem_write_en<=1'b0;
         mem_addr<=14'd0; mem_data_out<=19'd0;
         x0<=0; x1<=0; x2<=0; x3<=0;
-        a0<=0; b1<=0; c2<=0; d3<=0;
+        a0<=0; a1<=0; a2<=0; a3<=0;
         X0<=0; X1<=0; X2<=0; X3<=0;   
     end else begin
         done<=1'b0;
@@ -107,8 +107,8 @@ always @(posedge clk) begin
             
             S_STAGE2: begin 
             X0<= a0+a2;
-            X1<= a0-a2;
-            X2<= a1+a3;
+            X1<= a1+a3;
+            X2<= a0-a2;
             X3<= a1-a3;        
             state<= S_WR0;    
             end

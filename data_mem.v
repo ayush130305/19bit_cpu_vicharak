@@ -20,7 +20,7 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module data_mem(
+module dmem(
 input wire clk,
 input wire [13:0] addr,
 input wire [18:0] data_in,

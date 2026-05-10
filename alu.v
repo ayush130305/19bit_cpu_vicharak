@@ -9,9 +9,9 @@ output reg carry,
 output zero
 
 );
+assign zero=(result==19'd0);
 
 
-  assign zero=(result==19'd0);
 always @(*) begin
     result=19'b0;
     carry=1'b0;

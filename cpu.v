@@ -7,7 +7,7 @@ module cpu(
     output reg [13:0] imem_addr,
     input wire [18:0] imem_data,
     
-    input [18:0] dmem_data_in,
+    input wire [18:0] dmem_data_in,
     output reg[13:0] dmem_addr,
     output reg[18:0] dmem_data_out,
     output reg dmem_write_en
@@ -51,7 +51,6 @@ reg flush_next;
 //PIPELINING 3 STAGE
 reg [18:0] ifid_instr; // fetch (holds instruction)
 
-
 reg [18:0] idex_op_a;
 reg [18:0] idex_op_b;
 reg [4:0] idex_opcode;
@@ -67,275 +66,376 @@ reg [3:0] exmem_dest;
 reg exmem_mem_op;
 reg exmem_is_load;
 reg [18:0] exmem_store_data;
-reg [18:0] exmem_mem_addr;
+reg [13:0] exmem_mem_addr;
 
 reg [18:0] memwb_result;
 reg memwb_wb_en;
 reg [3:0] memwb_dest;
 
+reg [18:0] alu_a,alu_b;
+reg [4:0] alu_op;
+wire [18:0] alu_result;
+wire alu_carry, alu_zero;
 
+alu main(
+    .a(alu_a),
+    .b(alu_b),
+    .op(idex_opcode),
+    .result(alu_result),
+    .carry(alu_carry),
+    .zero(alu_zero) 
+);
 
+//fft and xor encryption
 
-//encryption
+reg fft_start;
+reg [13:0] fft_src_base, fft_dst_base;
+wire [13:0] fft_mem_addr;
+wire [18:0] fft_mem_data_out;
+wire fft_mem_write_en, fft_done;
 
-wire enc_done;
-wire enc_busy;
-wire [18:0] enc_data_out;
-reg enc_start;
+reg xor_start, xor_enc_mode;
+reg [13:0] xor_src_base, xor_dst_base;
+wire [13:0] xor_mem_addr;
+wire [18:0] xor_mem_data_out;
+wire xor_mem_write_en, xor_done;
+
+fft_unit u_fft(
+.clk(clk), .rst(rst), .start(fft_start), .src_base(fft_src_base), .dst_base(fft_dst_base), .mem_data_in(dmem_data_in),
+.mem_addr(fft_mem_addr), .mem_data_out(fft_mem_data_out), .mem_write_en(fft_mem_write_en), .done(fft_done)
+);
+
+encryption u_xor(
+.clk(clk), .rst(rst), .start(xor_start),.enc_mode(xor_enc_mode), .src_base(xor_src_base), .dst_base(xor_dst_base), .mem_data_in(dmem_data_in),
+.mem_addr(xor_mem_addr), .mem_data_out(xor_mem_data_out), .mem_write_en(xor_mem_write_en), .done(xor_done)
+);
+
+reg unit_active;
+reg unit_sel;
+
+//decode stage
+wire [4:0] dec_opcode = ifid_instr[18:14];
+wire [3:0] dec_r = ifid_instr[13:10];
+wire [3:0] dec_r1 = ifid_instr[9:6];
+wire [3:0] dec_r2 = ifid_instr[5:2];
+wire [13:0] dec_addr_field = ifid_instr[13:0];
 
 
 //data forwarding logic
+reg [18:0] fwd_op_a, fwd_op_b;
+always @(*) begin
+fwd_op_a= reg_file[dec_r1];
+fwd_op_b= reg_file[dec_r2];
 
-wire [18:0] op_a=(writeback_register && (dest_index == r1)) ? alu_result : reg_file[r1];
-wire [18:0] op_b=(writeback_register && (dest_index == r2)) ? alu_result : reg_file[r2];
+//execute/memory forwarding
+if(exmem_wb_en &&(exmem_dest!=4'd0)&&(exmem_dest==dec_r1))
+fwd_op_a=exmem_result;
+else if (memwb_wb_en &&(memwb_dest!=4'd0)&&(memwb_dest==dec_r1))
+fwd_op_a=memwb_result;
 
-//stalling logic for load function
+if(exmem_wb_en &&(exmem_dest!=4'd0)&&(exmem_dest==dec_r2))
+fwd_op_b=exmem_result;
+else if (memwb_wb_en &&(memwb_dest!=4'd0)&&(memwb_dest==dec_r2))
+fwd_op_b=memwb_result;
 
-wire check_load = (opcode==5'b10000) && (mem_data_in[9:6] ==R || mem_data_in[5:2]==R);
-//wire instr_needing_R= (mem_data_in[9:6]==R || (mem_data_in[5:2]==R));
-wire stall = check_load || enc_busy;
+end
 
-encryption XTEA(
-    .clk(clk),
-    .rst(rst),
-    .start(enc_start),
-    .data_in(op_a), //plain text
-    .key(op_b), //key
-    .data_out(enc_data_out),
-    .busy(enc_busy),
-    .done(enc_done)
+//alu input
+always @(*) begin
+alu_op=idex_opcode;
+alu_a=idex_op_a;
+alu_b=idex_op_b;
+end
 
-);
+//stalling logic
+wire load_use_stall= exmem_mem_op && exmem_is_load && ((exmem_dest==idex_r1)||(exmem_dest==idex_r2))&&(exmem_dest!=4'd0);
+wire stall =load_use_stall || unit_active;
 
+//execute 
+wire beq_taken= (idex_opcode == op_beq) && (idex_op_a==idex_op_b);
+wire bne_taken= (idex_opcode == op_bne) && (idex_op_a!=idex_op_b);
+wire branch_taken = beq_taken || bne_taken;
 
+wire ex_is_jump= (idex_opcode== op_jmp)||(idex_opcode==op_call)||(idex_opcode==op_ret);
 
+wire flush_pipe= branch_taken || ex_is_jump;
 
-wire[18:0] alu_op;
-wire alu_z,alu_c;
-
-alu main(
-    .a(op_a),
-    .b(op_b),
-    .op(opcode),
-    .result(alu_op),
-    .carry(alu_c),
-    .zero(alu_z) 
-);
-
-
-//FETCH
-always @(posedge clk or posedge rst) begin
-    if (rst) begin 
-        pc <= 19'b0;
-        instr_register=19'h7FFFF;
-        mem_addr <= 14'b0;
-    end else if(!stall) begin
-        mem_addr <= pc[13:0];
-        instr_register <= mem_data_in;
-        pc<=pc+1;
-    end  
-
+//dmem
+always @(*) begin
+ if (unit_active && unit_sel==1'b0) begin
+    dmem_addr=fft_mem_addr;
+    dmem_data_out=fft_mem_data_out;
+    dmem_write_en=fft_mem_write_en;
+ end else if (unit_active && unit_sel==1'b1) begin
+    dmem_addr=xor_mem_addr;
+    dmem_data_out=xor_mem_data_out;
+    dmem_write_en=xor_mem_write_en;
+ end else begin
+    dmem_addr=exmem_mem_addr;
+    dmem_data_out=exmem_store_data;
+    dmem_write_en=exmem_mem_op&& !exmem_is_load;
  end
+end      
 
-//DECODE/EXECUTE
-always @(posedge clk or posedge rst) begin
-    if(rst) begin
-//        pc <= 19'b0;
-        sp <= 4'b0;
-        alu_result <= 19'b0;
-        dest_index <= 4'b0;
-        instr_register<= 19'b0;
-        writeback_register <= 1'b0;
-        flag_z <= 1'b0;
-        flag_c <= 1'b0;
-        mem_write_en <= 1'b0;
-        enc_start<=0;
-    end else begin
-//        instr_register <= mem_data_in; //takes data from RAM   
-        writeback_register <= 1'b0;
-        mem_write_en <= 1'b0;
-        enc_start<=0;
-        
-        case(opcode)
-    //ALU (ADD,SUB,MUL,DIV,REM,AND,OR,XOR,NOT)
-        5'b00000, 5'b00001, 5'b00010, 5'b00011, 5'b00100,
-        5'b00111, 5'b01000, 5'b01001, 5'b01010: begin
-        
-        alu_result <= alu_op;
-        dest_index <= R;
-        writeback_register <= 1'b1;
-        flag_z <= alu_z;
-        flag_c <= alu_c;
-//        reg_file[R]<=alu_op;
-        if (!stall) pc<=pc+1;
-        end
-        
-        //inc,dec
-        5'b00101, 5'b00110: begin
-        alu_result <= alu_op;
-        dest_index <= R;
-        writeback_register <= 1'b1;
-        flag_z <= alu_z;
-        pc <= pc+1;        
-        end
-        
-        //control flow functions
-        5'b01011: begin
-        pc<=addr_field; //jmp
-        instr_register<=19'b0 ;
-        end
-        
-        5'b01100: begin //beq
-        if(op_a==op_b) begin
-        pc<=addr_field;
-        instr_register<=19'b0;
-        end else if (!stall) pc<=pc+1;
-        end
-        
-        5'b01101: begin //bne
-        if(op_a!=op_b) begin 
-        pc<=addr_field;
-        instr_register<=19'b0 ;   
-        end else if (!stall) pc<=pc+1;
-        end
-        
-        5'b01110: begin //call
-        stack[sp]<=pc+1;
-        sp<=sp+1;
-        pc<=addr_field;
-        instr_register<=19'b0 ;
-        end
-        
-        5'b01111: begin //return
-        pc<=stack[sp-1];
-        sp<=sp-1;
-        instr_register<=19'b0 ;
-        end
-        
-        
-        //mem access functions
-        
-       5'b10000: begin //load
-       alu_result<=mem_data_in;
-       dest_index<=R;
-       writeback_register<=1'b1;
-       if (!stall) pc<=pc+1;
-       end
-       
-       5'b10001: begin //store
-       mem_addr <= addr_field;
-       mem_data_out <= op_a;
-       mem_write_en <= 1'b1;
-       writeback_register<=1'b0;
-       if (!stall) pc<=pc+1;
-       end
-       
-       5'b10010: begin //encryption
-       if(!enc_busy && !enc_done) begin
-       enc_start <=1;
-       writeback_register<=0;
-       end else if(enc_done) begin
-       alu_result<=enc_data_out;
-       dest_index<=R;
-       writeback_register<=1;
-       pc<=pc+1;
-       end else begin
-       writeback_register<=0;
-       end
-   end    
-        default: if (!stall) pc<=pc+1;
-    
-   endcase
-   end
- end
+integer idx;
 
-// WRITE BACK
-    always@ (posedge clk) begin
-        if (writeback_register && !rst) begin
-            reg_file[dest_index] <= alu_result;
-        end
-    end
-    
+always @(posedge clk) begin
+    if (rst) begin
+        pc <=14'd0;
+        imem_addr <= 14'd0;
+        ifid_instr <= 19'd0;
+        flush_next <= 1'b0;
         
-//integer i;
-
-//reg state; //for stageing pipeline
-
-//always @(posedge clk or posedge rst) begin
-//    if(rst) begin   
-//    pc<=19'b0;
-//    sp<=4'b0;
-//    state<= 1'b0;
-//    mem_write_en<=1'b0;
-//    mem_addr<=14'b0;
-    
-//    for(i=0;i<8;i=i+1) stack[i]<=19'b0;
-    
-//    for(i=0;i<16;i=i+1) 
-//        reg_file[i]<=19'b0;
-//    end else begin  
-//    if (state==1'b0) begin
-    
-//    mem_addr<=pc[13:0];
-//    mem_write_en<=1'b0;
-//    state<=1'b1;
-//    end else begin
-    
-//    state<=1'b0;
-    
-    
-//    case(opcode)
-//    //ALU
-//        5'b00000, 5'b00001, 5'b00010, 5'b00011, 5'b00100, 5'b00101, 5'b00110,
-//        5'b00111, 5'b01000, 5'b01001, 5'b01010: begin
+        idex_op_a <= 19'd0;
+        idex_op_b <= 19'd0;
+        idex_opcode <= 5'd0;
+        idex_r <= 4'd0;
+        idex_r1 <= 4'd0;
+        idex_r2 <= 4'd0;
+        idex_addr <=14'd0;
+        idex_pc <= 14'd0;
         
-//        reg_file[R]<=alu_op;
-//        pc<=pc+1;
-//        end
+        exmem_result <= 19'd0;
+        exmem_wb_en <= 1'b0;
+        exmem_dest <= 4'd0;
+        exmem_mem_op <= 1'b0;
+        exmem_is_load <= 1'b0;
+        exmem_store_data <= 19'd0;
+        exmem_mem_addr <= 14'd0;
         
-//        //control flow functions
-//        5'b01011: pc<=addr_field; //jmp
+        memwb_result <= 19'd0;
+        memwb_wb_en <= 1'b0;
+        memwb_dest <= 4'd0;
         
-//        5'b01100: begin //beq
-//        if(reg_file[r1]==reg_file[r2]) pc<=addr_field;
-//        else pc<=pc+1;
-//        end
+        sp <= 4'd0;
+        unit_active <= 1'b0;
+        unit_sel <= 1'b0;
+        fft_start <=1'b0;
+        fft_src_base <=14'd0;
+        fft_dst_base <= 14'd0;
+        xor_start <= 1'b0;
+        xor_enc_mode <= 1'b0;
+        xor_src_base <= 14'd0;
+        xor_dst_base <= 14'd0;
         
-//        5'b01101: begin //bne
-//        if(reg_file[r1]!=reg_file[r2])pc<=addr_field;
-//        else pc<=pc+1;
-//        end
-        
-//        5'b01110: begin //call
-//        stack[sp]<=pc+1;
-//        sp<=sp+1;
-//        pc<=addr_field;
-//        end
-        
-//        5'b01111: begin //return
-//        pc<=stack[sp-1];
-//        sp<=sp-1;
-//        end
-        
-        
-//        //mem access functions
-        
-//       5'b10000: begin //load
-//       reg_file[R]<=mem_data_in;
-//       pc<=pc+1;
-//       end
-       
-//       5'b10001: begin //store
-//       mem_addr<=addr_field;
-//       mem_data_out<=reg_file[R];
-//       mem_write_en<=1'b1;
-//       pc<=pc+1;
-//       end
-       
-//        default: pc<=pc+1;
-    
-//   endcase
-//   end
-//  end
-// end   
+        for(idx=0;idx<16;idx=idx+1)
+            stack[idx] <= 19'd0;
+            
+        end else begin
+            fft_start <= 1'b0;
+            xor_start <= 1'b0;
+            
+            if(unit_active) begin
+                if((unit_sel==1'b0 && fft_done) || (unit_sel==1'b1 && xor_done)) 
+                    unit_active <= 1'b0;
+                    
+            end else if (!stall) begin
+                if(exmem_mem_op && exmem_is_load)
+                memwb_result <= dmem_data_in;
+                else
+                memwb_result <= exmem_result;
+                memwb_wb_en <= exmem_wb_en;
+                memwb_dest <= exmem_dest;
+                
+                
+                exmem_wb_en<=1'b0;
+                exmem_mem_op<=1'b0;
+                exmem_is_load<=1'b0;
+                exmem_result<=19'd0;
+                exmem_dest<=4'd0;
+                exmem_store_data<=19'd0;
+                exmem_mem_addr<=14'd0;
+                
+                case (idex_opcode)
+                op_add, op_sub, op_mul, op_div, op_rem, op_and, op_or, op_xor: begin
+                exmem_result<=alu_result;
+                exmem_wb_en<=1'b1;
+                exmem_dest<=idex_r;
+                end
+                
+                op_inc:begin      
+                exmem_result<=idex_op_a+19'd1;
+                exmem_wb_en<=1'b1;
+                exmem_dest<=idex_r;    
+                end
+                
+                op_dec: begin
+                exmem_result<=idex_op_a-19'd1;
+                exmem_wb_en<=1'b1;
+                exmem_dest<=idex_r;
+                end
+                
+                op_not: begin
+                exmem_result<= ~idex_op_a;
+                exmem_wb_en<=1'b1;
+                exmem_dest<=idex_r;  
+                end             
+                
+                op_load: begin
+                exmem_mem_op<=1'b1;
+                exmem_is_load<=1'b1;
+                exmem_mem_addr<=idex_addr;
+                exmem_dest<=idex_r;
+                exmem_wb_en<=1'b1;
+                end
+                
+                op_store: begin
+                exmem_mem_op<=1'b1;
+                exmem_is_load<=1'b0;
+                exmem_mem_addr<=idex_addr;
+                exmem_store_data<=idex_op_a;
+                exmem_wb_en<=1'b0;
+                end
+                
+                op_jmp: begin
+                end
+                
+                op_beq: begin
+                end
+                
+                op_bne: begin
+                end
+                
+                op_call: begin
+                stack[sp]<={5'd0,idex_pc};
+                sp<=sp+4'd1;
+                end
+                
+                op_ret:begin
+                end
+                
+                op_fft: begin
+                fft_src_base<=idex_op_b[13:0];
+                fft_dst_base<=idex_op_a[13:0];
+                fft_start<=1'b1;
+                unit_sel<=1'b0;
+                unit_active<=1'b1;
+                end
+                
+                op_enc: begin
+                xor_src_base<=idex_op_b[13:0];
+                xor_dst_base<=idex_op_a[13:0];
+                xor_enc_mode<=1'b1;
+                xor_start<=1'b1;
+                unit_sel<=1'b1;
+                unit_active<=1'b1; 
+                end
+                
+                op_decr: begin
+                xor_src_base<=idex_op_b[13:0];
+                xor_dst_base<=idex_op_a[13:0];
+                xor_enc_mode<=1'b0;
+                xor_start<=1'b1;
+                unit_sel<=1'b1;
+                unit_active<=1'b1;                 
+                end               
+                
+                default : begin
+                end
+                endcase
+                
+                if(flush_pipe) begin
+                    if (idex_opcode == op_ret) begin
+                    pc<=stack[sp-4'd1][13:0];
+                    imem_addr<=stack[sp-4'd1][13:0];
+                    sp<=sp-4'd1;
+                end else begin
+                    pc<=idex_addr;
+                    imem_addr<=idex_addr;
+                end
+          end
+          
+          if(flush_pipe) begin
+          ifid_instr<=19'd0;
+          idex_op_a<=19'd0;
+          idex_op_b<=19'd0;
+          idex_opcode<=5'd0;
+          idex_r<=4'd0;
+          idex_r1<=4'd0;
+          idex_r2<=4'd0;
+          idex_addr<=14'd0;
+          idex_pc<=14'd0;
+          
+          flush_next <=1'b1;
+          end else begin
+          
+          if (load_use_stall) begin
+          ifid_instr<=19'd0;
+          idex_op_a<=19'd0;
+          idex_op_b<=19'd0;
+          idex_opcode<=5'd0;
+          idex_r<=4'd0;
+          idex_r1<=4'd0;
+          idex_r2<=4'd0;
+          idex_addr<=14'd0;
+          idex_pc<=14'd0;  
+          
+          end else begin 
+          idex_op_a<=fwd_op_a;
+          idex_op_b<=fwd_op_b;
+          idex_opcode<=dec_opcode;
+          idex_r<=dec_r;
+          idex_r1<=dec_r1;
+          idex_r2<=dec_r2;
+          idex_addr<=dec_addr_field;
+          idex_pc<=pc;
+          
+          
+          if(flush_next) begin
+          ifid_instr<=19'd0;
+          flush_next<=1'b0;
+          
+          imem_addr<= pc+14'd1;
+          
+          end else begin
+          
+          ifid_instr<=imem_data;
+          pc<=pc+14'd1;
+          imem_addr<=pc+14'd1;
+          end
+          end
+          end
+          
+          end else begin
+            if(load_use_stall && !unit_active) begin
+                if(exmem_mem_op && exmem_is_load)
+                    memwb_result<=dmem_data_in;
+                else          
+                
+                memwb_result<=exmem_result;
+                memwb_wb_en<=exmem_wb_en;
+                memwb_dest<=exmem_dest;
+                
+                exmem_wb_en<=1'b0;
+                exmem_mem_op<=1'b0;
+                exmem_is_load<=1'b0;
+                exmem_result<=19'd0;
+                exmem_dest<=4'd0;
+                exmem_store_data<=19'd0;
+                exmem_mem_addr<=14'd0;
+                
+                idex_op_a<=19'd0;
+                idex_op_b<=19'd0;
+                idex_opcode<=5'd0;
+                idex_r<=4'd0;
+                idex_r1<=4'd0;
+                idex_r2<=4'd0;
+                idex_addr<=14'd0;
+                idex_pc<=14'd0;
+                end
+                end
+                end
+                end
+                
+                integer widx;
+                always @(posedge clk) begin
+                if (rst) begin
+                    for(widx=0;widx<16;widx=widx+1)
+                    reg_file[widx]<=19'd0;
+                    end else begin
+                    if(memwb_wb_en && (memwb_dest !=4'd0))
+                    reg_file[memwb_dest]<=memwb_result;
+                    end
+                    end
+          
 endmodule
