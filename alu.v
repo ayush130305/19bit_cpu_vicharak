@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+
 module alu(
 input[18:0] a,
 input[18:0] b,

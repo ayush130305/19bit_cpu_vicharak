@@ -29,6 +29,14 @@ wire[3:0] r1=instr_register[9:6];
 wire[3:0] r2=instr_register[5:2];
 wire [13:0] addr_field=instr_register[13:0];
 
+//encryption
+
+wire enc_done;
+wire enc_busy;
+wire [18:0] enc_data_out;
+reg enc_start;
+
+
 //data forwarding logic
 
 wire [18:0] op_a=(writeback_register && (dest_index == r1)) ? alu_result : reg_file[r1];
@@ -36,9 +44,22 @@ wire [18:0] op_b=(writeback_register && (dest_index == r2)) ? alu_result : reg_f
 
 //stalling logic for load function
 
-wire check_load = (opcode==5'b10000);
-wire instr_needing_R= (mem_data_in[9:6]==R || (mem_data_in[5:2]==R));
-wire stall = check_load && instr_needing_R;
+wire check_load = (opcode==5'b10000) && (mem_data_in[9:6] ==R || mem_data_in[5:2]==R);
+//wire instr_needing_R= (mem_data_in[9:6]==R || (mem_data_in[5:2]==R));
+wire stall = check_load || enc_busy;
+
+encryption XTEA(
+    .clk(clk),
+    .rst(rst),
+    .start(enc_start),
+    .data_in(op_a), //plain text
+    .key(op_b), //key
+    .data_out(enc_data_out),
+    .busy(enc_busy),
+    .done(enc_done)
+
+);
+
 
 
 
@@ -59,15 +80,15 @@ alu main(
 always @(posedge clk or posedge rst) begin
     if (rst) begin 
         pc <= 19'b0;
-        instr_register=19'b0;
+        instr_register=19'h7FFFF;
         mem_addr <= 14'b0;
     end else if(!stall) begin
         mem_addr <= pc[13:0];
         instr_register <= mem_data_in;
-    end else begin 
-    instr_register <= 19'b0;
-    end
-end
+        pc<=pc+1;
+    end  
+
+ end
 
 //DECODE/EXECUTE
 always @(posedge clk or posedge rst) begin
@@ -76,15 +97,17 @@ always @(posedge clk or posedge rst) begin
         sp <= 4'b0;
         alu_result <= 19'b0;
         dest_index <= 4'b0;
-//        instr_register<= 19'b0;
+        instr_register<= 19'b0;
         writeback_register <= 1'b0;
         flag_z <= 1'b0;
         flag_c <= 1'b0;
         mem_write_en <= 1'b0;
+        enc_start<=0;
     end else begin
 //        instr_register <= mem_data_in; //takes data from RAM   
         writeback_register <= 1'b0;
         mem_write_en <= 1'b0;
+        enc_start<=0;
         
         case(opcode)
     //ALU (ADD,SUB,MUL,DIV,REM,AND,OR,XOR,NOT)
@@ -101,7 +124,7 @@ always @(posedge clk or posedge rst) begin
         end
         
         //inc,dec
-        5'b00100, 5'b00101: begin
+        5'b00101, 5'b00110: begin
         alu_result <= alu_op;
         dest_index <= R;
         writeback_register <= 1'b1;
@@ -116,14 +139,14 @@ always @(posedge clk or posedge rst) begin
         end
         
         5'b01100: begin //beq
-        if(reg_file[r1]==reg_file[r2]) begin
+        if(op_a==op_b) begin
         pc<=addr_field;
         instr_register<=19'b0;
         end else if (!stall) pc<=pc+1;
         end
         
         5'b01101: begin //bne
-        if(reg_file[r1]!=reg_file[r2]) begin 
+        if(op_a!=op_b) begin 
         pc<=addr_field;
         instr_register<=19'b0 ;   
         end else if (!stall) pc<=pc+1;
@@ -153,12 +176,26 @@ always @(posedge clk or posedge rst) begin
        end
        
        5'b10001: begin //store
-       alu_result<=mem_data_in;
-       dest_index<=R;
-       writeback_register<=1'b1;
+       mem_addr <= addr_field;
+       mem_data_out <= op_a;
+       mem_write_en <= 1'b1;
+       writeback_register<=1'b0;
        if (!stall) pc<=pc+1;
        end
        
+       5'b10010: begin //encryption
+       if(!enc_busy && !enc_done) begin
+       enc_start <=1;
+       writeback_register<=0;
+       end else if(enc_done) begin
+       alu_result<=enc_data_out;
+       dest_index<=R;
+       writeback_register<=1;
+       pc<=pc+1;
+       end else begin
+       writeback_register<=0;
+       end
+   end    
         default: if (!stall) pc<=pc+1;
     
    endcase
