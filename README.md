@@ -1,78 +1,157 @@
-Define the CPU Architecture:
-   •    Choose an 19-bit architecture ( Instruction size will be 19-bit ).
-   •    Define a specialized instruction set tailored to a specific application or set of applications (e.g., signal processing, cryptography).
-   •    Create a detailed architectural specification, including pipeline stages, register file, ALU, and memory interfaces. 
+# 19-Bit Harvard CPU — Verilog
 
-You can use Verilog/VHDL/systemverilog. You can add some extra instructions as well, based on your convenience.
+A 19-bit CPU built in Verilog with a 5-stage pipeline and Harvard architecture (separate instruction and data memory). Built and tested on Vivado 2024.2 and simulation ran on edaplayground website.
+Simulation: https://edaplayground.com/x/tSTt
 
-You are supposed to submit the task within 15 days.
+---
 
-Arithmetic Instructions    
-1.    ADD r1, r2, r3
-   •    Description: Add the values in registers r2 and r3, and store the result in r1.
-   •    Operation: r1 = r2 + r3
-2.    SUB r1, r2, r3
-   •    Description: Subtract the value in register r3 from the value in register r2, and store the result in r1.
-   •    Operation: r1 = r2 - r3 
-3.    MUL r1, r2, r3
-   •    Description: Multiply the values in registers r2 and r3, and store the result in r1.
-   •    Operation: r1 = r2 * r3
-4.    DIV r1, r2, r3
-   •    Description: Divide the value in register r2 by the value in register r3, and store the result in r1.
-   •    Operation: r1 = r2 / r3
-5.    INC r1
-   •    Description: Increment the value in register r1 by 1.
-   •    Operation: r1 = r1 + 1
-6.    DEC r1
-   •    Description: Decrement the value in register r1 by 1.
-   •    Operation: r1 = r1 - 1
+## What's in this project
 
-Logical Instructions    
-1.    AND r1, r2, r3
-   •    Description: Perform a bitwise AND on the values in registers r2 and r3, and store the result in r1.
-   •    Operation: r1 = r2 & r3
-2.    OR r1, r2, r3
-   •    Description: Perform a bitwise OR on the values in registers r2 and r3, and store the result in r1.
-   •    Operation: r1 = r2 | r3
-3.    XOR r1, r2, r3
-   •    Description: Perform a bitwise XOR on the values in registers r2 and r3, and store the result in r1.
-   •    Operation: r1 = r2 ^ r3
-4.    NOT r1, r2
-   •    Description: Perform a bitwise NOT on the value in register r2, and store the result in r1.
-   •    Operation: r1 = ~r2
+| File | What it does |
+|---|---|
+| `cpu.v` | The main CPU — pipeline, hazard handling, everything |
+| `alu.v` | Does all the math and logic operations |
+| `instruct_mem.v` | Instruction memory (ROM) — stores the program |
+| `data_mem.v` | Data memory (RAM) — read/write storage |
+| `fft_unit.v` | 4-point FFT accelerator |
+| `encryption.v` | XOR encrypt/decrypt unit |
+| `cpu_tb.v` | Testbench — verifies everything works |
 
-Control Flow Instructions    
-1.    JMP addr
-   •    Description: Jump to the specified address.
-   •    Operation: PC = addr
-2.    BEQ r1, r2, addr
-   •    Description: Branch to the specified address if the values in registers r1 and r2 are equal.
-   •    Operation: if (r1 == r2) PC = addr
-3.    BNE r1, r2, addr
-   •    Description: Branch to the specified address if the values in registers r1 and r2 are not equal.
-   •    Operation: if (r1 != r2) PC = addr
-4.    CALL addr
-   •    Description: Call a subroutine at the specified address.
-   •    Operation: stack[SP] = PC + 1; SP = SP - 1; PC = addr
-5.    RET
-   •    Description: Return from a subroutine.
-   •    Operation: SP = SP + 1; PC = stack[SP]
+---
 
-Memory Access Instructions    
-1.    LD r1, addr
-   •    Description: Load the value from the specified memory address into register r1.
-   •    Operation: r1 = memory[addr]
-2.    ST addr, r1
-   •    Description: Store the value in register r1 to the specified memory address.
-   •    Operation: memory[addr] = r1
+## Instruction set
 
-Custom Instructions (for specialized applications)    
-1.    FFT r1, r2
-   •    Description: Perform a Fast Fourier Transform on the data starting at address r2, and store the result in the location pointed to by r1.
-   •    Operation: FFT(memory[r2], result); memory[r1] = result
-2.    ENC r1, r2
-   •    Description: Encrypt the data starting at address r2 using a predefined encryption algorithm, and store the result in the location pointed to by r1.
-   •    Operation: encrypted_data = Encrypt(memory[r2]); memory[r1] = encrypted_data
-3.    DEC r1, r2
-   •    Description: Decrypt the data starting at address r2 using a predefined decryption algorithm, and store the result in the location pointed to by r1.
-   •    Operation: decrypted_data = Decrypt(memory[r2]); memory[r1] = decrypted_data
+21 instructions total across arithmetic, logic, control flow, and memory.
+
+**Arithmetic:** ADD, SUB, MUL, DIV, REM, INC, DEC  
+**Logic:** AND, OR, XOR, NOT  
+**Control:** JMP, BEQ, BNE, CALL, RET  
+**Memory:** LOAD, STORE  
+**Special:** FFT, ENC, DECR  
+
+---
+
+## Instruction encoding
+
+Every instruction is 19 bits wide:
+
+```
+[18:14] opcode (5 bits)
+[13:10] destination register R
+[9:6]   source register r1
+[5:2]   source register r2
+[1:0]   unused
+```
+
+For LOAD, STORE, JMP, BEQ, BNE, CALL — bits [13:0] are used as a 14-bit address field instead.
+
+---
+
+## Pipeline
+
+5 stages: **Fetch → Decode → Execute → Memory → Writeback**
+
+Hazards handled:
+- **RAW hazards** — forwarding from EX/MEM and MEM/WB stages
+- **Load-use hazard** — 1-cycle stall inserted automatically
+- **Branch/jump** — 2-cycle flush with a `flush_next` flag to catch the stale ROM word
+
+---
+
+## Special units
+
+**FFT unit** — reads 4 samples from data memory, computes a 4-point DIT butterfly FFT, writes 4 results back. CPU stalls until done.
+
+**Encryption unit** — XOR cipher with a fixed 4-word key. Works for both encrypt and decrypt (XOR is symmetric). CPU stalls until done.
+
+Keys used:
+```
+KEY0 = 0x2A5F3
+KEY1 = 0x1C8B7
+KEY2 = 0x3D1E6
+KEY3 = 0x0F4A2
+```
+
+---
+
+## Testbench sections
+
+```verilog
+`define test_alu    // arithmetic and logic unit tests
+`define test_ctrl   // JMP, BEQ, BNE, CALL, RET
+`define test_mem    // LOAD and STORE
+`define test_fft    // FFT unit
+`define test_enc    // encrypt and decrypt
+```
+
+Comment out any line to skip that section.
+
+---
+
+## Testbench output
+
+All 47 tests pass across all 5 sections:
+
+```
+ 19-bit CPU Master Testbench
+
+ ALU
+pass                     ADD 15+10=25
+pass               ADD overflow carry
+pass                      sub 20-8=12
+pass                       mul 7*6=42
+pass                       div 18/3=6
+pass                    div by zero=0
+pass                       rem 17%5=2
+pass                     inc 99+1=100
+pass                      dec 50-1=49
+pass           AND 0xAA & 0xF0 = 0xA0
+pass                OR 0xAA|0x55=0xFF
+pass               XOR 0xFF^0xF0=0x0F
+pass                    NOT 0=0x7FFFF
+pass     zero flag set when result =0
+pass     zero flag set when result!=0
+
+ control flow
+pass                 jmp landed: r6=1
+pass          jmp traps skipped: r5=0
+pass                  beq taken: r9=1
+pass beq not taken trap skipped: r7=0
+pass  bne not taken fallthrough: r8=1
+pass                 bne taken: r10=1
+pass       call subroutine ran: r12=1
+pass              ret returned: r11=1
+
+ load, store
+pass   STORE reg[1]=48879 → dmem[64]
+pass  STORE reg[2]=12345 → dmem[128]
+pass     dmem[5] integrity: still 777
+pass    dmem[10] integrity: still 999
+
+ FFT
+pass          FFT X0=10 (x=[4,3,2,1])
+pass                         FFT X1=4
+pass                         FFT X2=2
+pass                         FFT X3=0
+pass           FFT X0=1 (x=[1,0,0,0])
+pass                         FFT X1=1
+pass                         FFT X2=1
+pass                         FFT X3=1
+
+ ENC / DEC
+pass              ENC word0 = p0^KEY0
+pass              ENC word1 = p1^KEY1
+pass              ENC word2 = p2^KEY2
+pass              ENC word3 = p3^KEY3
+pass     DEC word0 recovers plaintext
+pass     DEC word1 recovers plaintext
+pass     DEC word2 recovers plaintext
+pass     DEC word3 recovers plaintext
+pass                  ENC 0^KEY0=KEY0
+pass                  ENC 0^KEY1=KEY1
+pass                  ENC 0^KEY2=KEY2
+pass                  ENC 0^KEY3=KEY3
+
+ Total: 47 PASS  0 FAIL
+ ALL PASS
+```
